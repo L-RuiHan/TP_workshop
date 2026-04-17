@@ -5,3 +5,7 @@ pandas
 matplotlib
 safetensors
 sentencepiece
+requests
+bertopic
+scikit-learn
+sentence-transformers
