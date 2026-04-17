@@ -16,8 +16,8 @@ st.set_page_config(
 # Editable Config
 # =========================================================
 SENTIMENT_MODEL_NAME = "sunpeishan/finetuned-finbert-sentiment-plp"
-TOPIC_MODEL_NAME = "your-topic-model-name-here"  # e.g. username/financial-risk-topic-model
-ENABLE_TOPIC_MODEL = False  # change to True after your topic model is ready on Hugging Face
+TOPIC_MODEL_URL = "https://huggingface.co/huiwen999/BERTopic/resolve/main/model_bundle.pkl"
+ENABLE_TOPIC_MODEL = True  # topic model is loaded from a Hugging Face file URL
 
 # Optional label maps for topic model output
 TOPIC_ID_TO_NAME = {
@@ -92,17 +92,31 @@ def load_sentiment_pipeline():
 
 
 @st.cache_resource
-def load_topic_pipeline():
+def load_topic_model_from_url():
     if not ENABLE_TOPIC_MODEL:
         return None
 
-    # You can change task type here depending on the topic model you finally deploy.
-    # Common choices: "text-classification" or "zero-shot-classification"
-    return pipeline("text-classification", model=TOPIC_MODEL_NAME)
+    import requests
+    import pickle
+    import tempfile
+    from pathlib import Path
+
+    response = requests.get(TOPIC_MODEL_URL, timeout=120)
+    response.raise_for_status()
+
+    temp_dir = Path(tempfile.gettempdir()) / "financial_nlp_dashboard"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    model_path = temp_dir / "model_bundle.pkl"
+    model_path.write_bytes(response.content)
+
+    with open(model_path, "rb") as f:
+        topic_model = pickle.load(f)
+
+    return topic_model
 
 
 sentiment_pipeline = load_sentiment_pipeline()
-topic_pipeline = load_topic_pipeline()
+topic_model = load_topic_model_from_url()
 
 # =========================================================
 # Helpers
@@ -158,15 +172,37 @@ def normalize_topic_output(raw_result: dict):
 
 
 def predict_topic(text: str):
-    if topic_pipeline is None:
+    if topic_model is None:
         return {
             "label": "Topic model placeholder",
             "group": "Pending",
             "score": 0.0,
         }
 
-    result = topic_pipeline(text)[0]
-    return normalize_topic_output(result)
+    try:
+        topics, probs = topic_model.transform([text])
+        topic_id = topics[0]
+        topic_name = TOPIC_ID_TO_NAME.get(topic_id, f"Topic {topic_id}")
+        topic_group = TOPIC_ID_TO_GROUP.get(topic_id, "Unknown")
+
+        topic_score = 0.0
+        if probs is not None:
+            try:
+                topic_score = float(max(probs[0])) if hasattr(probs[0], "__iter__") else float(probs[0])
+            except Exception:
+                topic_score = 0.0
+
+        return {
+            "label": topic_name,
+            "group": topic_group,
+            "score": topic_score,
+        }
+    except Exception:
+        return {
+            "label": "Topic inference failed",
+            "group": "Unknown",
+            "score": 0.0,
+        }
 
 
 def analyze_text(text: str):
@@ -224,7 +260,7 @@ st.markdown(
             and the topic modeling module is reserved for a future Hugging Face deployment.
         </p>
         <p class="small-note"><b>Sentiment model:</b> {SENTIMENT_MODEL_NAME}</p>
-        <p class="small-note"><b>Topic model:</b> {TOPIC_MODEL_NAME if ENABLE_TOPIC_MODEL else 'Placeholder mode (not enabled yet)'}</p>
+        <p class="small-note"><b>Topic model:</b> {TOPIC_MODEL_URL if ENABLE_TOPIC_MODEL else 'Placeholder mode (not enabled yet)'}</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -235,7 +271,7 @@ with st.sidebar:
     st.write("**Sentiment**")
     st.code(SENTIMENT_MODEL_NAME)
     st.write("**Topic modeling**")
-    st.code(TOPIC_MODEL_NAME if ENABLE_TOPIC_MODEL else "Waiting for Hugging Face topic model")
+    st.code(TOPIC_MODEL_URL if ENABLE_TOPIC_MODEL else "Waiting for Hugging Face topic model")
     st.markdown("---")
     st.write("Recommended workflow:")
     st.write("1. Keep sentiment live now")
@@ -359,14 +395,14 @@ with tab3:
         """
         ### Current integration
         - **Sentiment module**: live Hugging Face model from Peishan
-        - **Topic module**: reserved integration slot for a future Hugging Face topic model
+        - **Topic module**: remote BERTopic pickle loaded from a Hugging Face file URL
         - **UI layer**: Streamlit dashboard for live demo and batch presentation
 
         ### How to activate topic modeling later
-        1. Push the topic model to Hugging Face
-        2. Replace `TOPIC_MODEL_NAME`
-        3. Change `ENABLE_TOPIC_MODEL = True`
-        4. Adjust topic label mapping if needed
+        1. Keep the current Hugging Face `model_bundle.pkl` file URL
+        2. Make sure the environment includes BERTopic dependencies
+        3. Adjust topic label mapping if needed
+        4. Re-run the app to activate topic inference
 
         ### Suggested final demo flow
         1. Enter one financial sentence and run live analysis
