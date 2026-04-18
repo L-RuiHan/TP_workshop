@@ -93,26 +93,72 @@ def load_sentiment_pipeline():
 
 @st.cache_resource
 def load_topic_model_from_url():
+    """
+    Robust topic-model loader for Streamlit Cloud.
+    It downloads model_bundle.pkl from Hugging Face Hub and tries multiple loaders.
+    If loading fails, the app will NOT crash; topic modeling will be shown as unavailable.
+    """
     if not ENABLE_TOPIC_MODEL:
         return None
 
-    import requests
-    import pickle
-    import tempfile
-    from pathlib import Path
+    try:
+        from huggingface_hub import hf_hub_download
+        import pickle
 
-    response = requests.get(TOPIC_MODEL_URL, timeout=120)
-    response.raise_for_status()
+        model_path = hf_hub_download(
+            repo_id="huiwen999/BERTopic",
+            filename="model_bundle.pkl",
+            repo_type="model",
+        )
 
-    temp_dir = Path(tempfile.gettempdir()) / "financial_nlp_dashboard"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    model_path = temp_dir / "model_bundle.pkl"
-    model_path.write_bytes(response.content)
+        # First check whether the downloaded file is actually a pickle file.
+        # HTML / Git-LFS pointer / error pages usually cause UnpicklingError.
+        with open(model_path, "rb") as f:
+            first_bytes = f.read(80)
 
-    with open(model_path, "rb") as f:
-        topic_model = pickle.load(f)
+        if first_bytes.startswith(b"<!DOCTYPE") or first_bytes.startswith(b"<html"):
+            st.warning("Topic model download returned an HTML page instead of a pickle file. Please check Hugging Face file access.")
+            return None
 
-    return topic_model
+        if first_bytes.startswith(b"version https://git-lfs.github.com/spec"):
+            st.warning("Topic model download returned a Git-LFS pointer instead of the real model file. Use huggingface_hub or check repository LFS settings.")
+            return None
+
+        # Try standard pickle first.
+        try:
+            with open(model_path, "rb") as f:
+                return pickle.load(f)
+        except Exception as pickle_error:
+            # Some pkl files are saved by joblib / cloudpickle / dill.
+            loaders = []
+            try:
+                import joblib
+                loaders.append(("joblib", lambda p: joblib.load(p)))
+            except Exception:
+                pass
+            try:
+                import cloudpickle
+                loaders.append(("cloudpickle", lambda p: cloudpickle.load(open(p, "rb"))))
+            except Exception:
+                pass
+            try:
+                import dill
+                loaders.append(("dill", lambda p: dill.load(open(p, "rb"))))
+            except Exception:
+                pass
+
+            for loader_name, loader_fn in loaders:
+                try:
+                    return loader_fn(model_path)
+                except Exception:
+                    continue
+
+            st.warning(f"Topic model could not be loaded. Pickle error: {type(pickle_error).__name__}. The app will continue without topic inference.")
+            return None
+
+    except Exception as e:
+        st.warning(f"Topic model loading failed: {type(e).__name__}. The app will continue without topic inference.")
+        return None
 
 
 sentiment_pipeline = load_sentiment_pipeline()
