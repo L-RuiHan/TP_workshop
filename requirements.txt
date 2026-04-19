@@ -5,13 +5,9 @@ pandas
 matplotlib
 safetensors
 sentencepiece
-requests
 huggingface_hub
 bertopic
 scikit-learn
 sentence-transformers
 umap-learn
 hdbscan
-joblib
-cloudpickle
-dill
