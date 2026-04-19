@@ -16,8 +16,8 @@ st.set_page_config(
 # Editable Config
 # =========================================================
 SENTIMENT_MODEL_NAME = "sunpeishan/finetuned-finbert-sentiment-plp"
-TOPIC_MODEL_URL = "https://huggingface.co/huiwen999/BERTopic/resolve/main/model_bundle.pkl"
-ENABLE_TOPIC_MODEL = True  # topic model is loaded from a Hugging Face file URL
+TOPIC_MODEL_REPO_ID = "huiwen999/BERTopic"
+ENABLE_TOPIC_MODEL = True  # topic model is loaded by BERTopic.load from Hugging Face Hub
 
 # Optional label maps for topic model output
 TOPIC_ID_TO_NAME = {
@@ -92,14 +92,46 @@ def load_sentiment_pipeline():
 
 
 @st.cache_resource
-def load_topic_model_from_url():
+def load_topic_model_from_hf():
     """
-    Robust topic-model loader for Streamlit Cloud.
-    It downloads model_bundle.pkl from Hugging Face Hub and tries multiple loaders.
-    If loading fails, the app will NOT crash; topic modeling will be shown as unavailable.
+    Load BERTopic model and topic mappings from Hugging Face Hub.
+    This uses BERTopic.load(repo_id), not pickle.load(model_bundle.pkl).
     """
     if not ENABLE_TOPIC_MODEL:
-        return None
+        return None, {}, {}
+
+    try:
+        import json
+        from bertopic import BERTopic
+        from huggingface_hub import hf_hub_download
+
+        model = BERTopic.load(TOPIC_MODEL_REPO_ID)
+
+        label_path = hf_hub_download(
+            repo_id=TOPIC_MODEL_REPO_ID,
+            filename="topic_label_map.json",
+            repo_type="model",
+        )
+        group_path = hf_hub_download(
+            repo_id=TOPIC_MODEL_REPO_ID,
+            filename="group_map.json",
+            repo_type="model",
+        )
+
+        with open(label_path, "r", encoding="utf-8") as f:
+            topic_label_map = json.load(f)
+
+        with open(group_path, "r", encoding="utf-8") as f:
+            group_map = json.load(f)
+
+        return model, topic_label_map, group_map
+
+    except Exception as e:
+        st.warning(
+            f"Topic model loading failed: {type(e).__name__}. "
+            "The app will continue without topic inference."
+        )
+        return None, {}, {}
 
     try:
         from huggingface_hub import hf_hub_download
@@ -162,7 +194,7 @@ def load_topic_model_from_url():
 
 
 sentiment_pipeline = load_sentiment_pipeline()
-topic_model = load_topic_model_from_url()
+topic_model, topic_label_map, group_map = load_topic_model_from_hf()
 
 # =========================================================
 # Helpers
@@ -199,8 +231,8 @@ def normalize_topic_output(raw_result: dict):
     try:
         if str(raw_label).lower().startswith("label_"):
             topic_id = int(str(raw_label).split("_")[-1])
-            topic_name = TOPIC_ID_TO_NAME.get(topic_id, f"Topic {topic_id}")
-            topic_group = TOPIC_ID_TO_GROUP.get(topic_id, "Unknown")
+            topic_name = topic_label_map.get(str(topic_id), TOPIC_ID_TO_NAME.get(topic_id, f"Topic {topic_id}"))
+        topic_group = group_map.get(str(topic_id), TOPIC_ID_TO_GROUP.get(topic_id, "Unknown"))
         elif str(raw_label).isdigit():
             topic_id = int(raw_label)
             topic_name = TOPIC_ID_TO_NAME.get(topic_id, f"Topic {topic_id}")
@@ -306,7 +338,7 @@ st.markdown(
             and the topic modeling module is reserved for a future Hugging Face deployment.
         </p>
         <p class="small-note"><b>Sentiment model:</b> {SENTIMENT_MODEL_NAME}</p>
-        <p class="small-note"><b>Topic model:</b> {TOPIC_MODEL_URL if ENABLE_TOPIC_MODEL else 'Placeholder mode (not enabled yet)'}</p>
+        <p class="small-note"><b>Topic model:</b> {TOPIC_MODEL_REPO_ID if ENABLE_TOPIC_MODEL else 'Placeholder mode (not enabled yet)'}</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -317,7 +349,7 @@ with st.sidebar:
     st.write("**Sentiment**")
     st.code(SENTIMENT_MODEL_NAME)
     st.write("**Topic modeling**")
-    st.code(TOPIC_MODEL_URL if ENABLE_TOPIC_MODEL else "Waiting for Hugging Face topic model")
+    st.code(TOPIC_MODEL_REPO_ID if ENABLE_TOPIC_MODEL else "Waiting for Hugging Face topic model")
     st.markdown("---")
     st.write("Recommended workflow:")
     st.write("1. Keep sentiment live now")
@@ -441,14 +473,14 @@ with tab3:
         """
         ### Current integration
         - **Sentiment module**: live Hugging Face model from Peishan
-        - **Topic module**: remote BERTopic pickle loaded from a Hugging Face file URL
+        - **Topic module**: BERTopic model loaded from Hugging Face using `BERTopic.load()`
         - **UI layer**: Streamlit dashboard for live demo and batch presentation
 
         ### How to activate topic modeling later
-        1. Keep the current Hugging Face `model_bundle.pkl` file URL
-        2. Make sure the environment includes BERTopic dependencies
-        3. Adjust topic label mapping if needed
-        4. Re-run the app to activate topic inference
+        1. Load `huiwen999/BERTopic` with `BERTopic.load()`
+        2. Download `topic_label_map.json` and `group_map.json` with `hf_hub_download()`
+        3. Use `model.transform([text])` for topic prediction
+        4. Translate the topic id into business topic and risk group
 
         ### Suggested final demo flow
         1. Enter one financial sentence and run live analysis
