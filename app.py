@@ -94,9 +94,6 @@ def load_sentiment_pipeline():
 
 @st.cache_resource
 def load_topic_model_from_hf():
-    """
-    Load BERTopic model and topic mappings from Hugging Face Hub.
-    """
     if not ENABLE_TOPIC_MODEL:
         return None, {}, {}
 
@@ -138,12 +135,8 @@ def load_topic_model_from_hf():
 # =========================================================
 # Cached Data Loaders from Hugging Face Dataset
 # =========================================================
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_csv_from_hf(filename: str):
-    """
-    Load CSV files from Hugging Face Dataset.
-    Since the dataset is public, no HF_TOKEN is required.
-    """
     try:
         from huggingface_hub import hf_hub_download
 
@@ -151,6 +144,7 @@ def load_csv_from_hf(filename: str):
             repo_id=HF_DATASET_REPO_ID,
             filename=filename,
             repo_type="dataset",
+            force_download=True,
         )
 
         return pd.read_csv(file_path)
@@ -163,22 +157,22 @@ def load_csv_from_hf(filename: str):
         return pd.DataFrame()
 
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_company_rsi_data():
     return load_csv_from_hf(COMPANY_RSI_FILE)
 
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_master_sentence_data():
     return load_csv_from_hf(MASTER_DATA_FILE)
 
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_topic_rsi_data():
     return load_csv_from_hf(TOPIC_RSI_FILE)
 
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_market_topic_rsi_data():
     return load_csv_from_hf(MARKET_TOPIC_RSI_FILE)
 
@@ -321,13 +315,6 @@ def prepare_company_data(company_rsi, master_df, topic_rsi):
 
 
 def get_top_risk_sentences(company_sentences: pd.DataFrame, top_n=3):
-    """
-    Ranking logic:
-    1. Risk group + Negative sentiment
-    2. Risk group only
-    3. Negative sentiment only
-    4. Fallback to all records
-    """
     if company_sentences.empty:
         return pd.DataFrame()
 
@@ -349,24 +336,37 @@ def get_top_risk_sentences(company_sentences: pd.DataFrame, top_n=3):
         errors="coerce",
     ).fillna(0)
 
-    top_df = df[
+    df = df.reset_index(drop=True)
+    df["row_id_for_ranking"] = df.index
+
+    priority_1 = df[
         (df["group_clean"] == "risk") &
         (df["sentiment_clean"] == "negative")
     ].copy()
 
-    if top_df.empty:
-        top_df = df[df["group_clean"] == "risk"].copy()
+    priority_2 = df[
+        df["group_clean"] == "risk"
+    ].copy()
 
-    if top_df.empty:
-        top_df = df[df["sentiment_clean"] == "negative"].copy()
+    priority_3 = df[
+        df["sentiment_clean"] == "negative"
+    ].copy()
 
-    if top_df.empty:
-        top_df = df.copy()
+    priority_4 = df.copy()
 
-    return top_df.sort_values(
+    combined = pd.concat(
+        [priority_1, priority_2, priority_3, priority_4],
+        axis=0,
+    )
+
+    combined = combined.drop_duplicates(subset=["row_id_for_ranking"])
+
+    combined = combined.sort_values(
         by="sentiment_probability",
         ascending=False,
     ).head(top_n)
+
+    return combined.drop(columns=["row_id_for_ranking"], errors="ignore")
 
 
 # =========================================================
@@ -602,6 +602,12 @@ with tab2:
                     topic_rsi["name_clean"] == selected_company
                 ].copy()
 
+            st.info(
+                f"Loaded master file: {MASTER_DATA_FILE} | "
+                f"Total rows in master data: {len(master_df):,} | "
+                f"Sentence-level rows for selected company: {len(company_sentences):,}"
+            )
+
             # =================================================
             # 1. Company Overview Metrics
             # =================================================
@@ -705,12 +711,20 @@ with tab2:
                     else:
                         st.info("No topic_label column found.")
 
+            else:
+                st.warning("No sentence-level records found for this company.")
+
             # =================================================
             # 3. Top 3 Highest-Risk Disclosure Sentences
             # =================================================
             st.markdown("### 3. Top 3 Highest-Risk Disclosure Sentences")
 
             top_risk_sentences = get_top_risk_sentences(company_sentences, top_n=3)
+
+            st.caption(
+                f"Showing {len(top_risk_sentences)} sentence(s) selected from "
+                f"{len(company_sentences)} available sentence-level record(s) for this company."
+            )
 
             if top_risk_sentences.empty:
                 st.info("No related sentence records found for this company.")
