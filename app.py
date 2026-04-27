@@ -25,7 +25,7 @@ ENABLE_TOPIC_MODEL = True
 HF_DATASET_REPO_ID = "LRH865/PLP_workshop"
 
 COMPANY_RSI_FILE = "Step4_Company_Level_RSI.csv"
-MASTER_DATA_FILE = "Step5_Master_Data_Sentiment_Topic_Sample.csv"
+MASTER_DATA_FILE = "Step5_Master_Data_Sentiment_Topic.csv"
 TOPIC_RSI_FILE = "Step6_Topic_Level_RSI.csv"
 MARKET_TOPIC_RSI_FILE = "Step7_Macro_Market_Topic_RSI.csv"
 
