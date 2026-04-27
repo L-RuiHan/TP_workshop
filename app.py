@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from transformers import pipeline
+from openai import OpenAI
 
 # =========================================================
 # Page Config
@@ -186,6 +187,106 @@ topic_model, topic_label_map, group_map = load_topic_model_from_hf()
 # =========================================================
 # Helper Functions
 # =========================================================
+def generate_ai_risk_summary(
+    company_name,
+    company_overview_row,
+    company_topics,
+    top_risk_sentences,
+):
+    if "OPENAI_API_KEY" not in st.secrets:
+        return (
+            "OpenAI API key is missing. Please add OPENAI_API_KEY "
+            "in Streamlit Secrets."
+        )
+
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+    overview_text = "No company-level RSI data available."
+    if company_overview_row is not None:
+        overview_text = {
+            "Total_Sentences": company_overview_row.get("Total_Sentences", "N/A"),
+            "Sum_Negative_Prob": company_overview_row.get("Sum_Negative_Prob", "N/A"),
+            "RSI_Raw": company_overview_row.get("RSI_Raw", "N/A"),
+            "RSI_Score_100": company_overview_row.get("RSI_Score_100", "N/A"),
+        }
+
+    topic_text = []
+    if company_topics is not None and not company_topics.empty:
+        topic_cols = [
+            c for c in [
+                "topic_label",
+                "group",
+                "Topic_Neg_Prob_Sum",
+                "Topic_RSI_Raw",
+                "Company_Internal_Risk_Rank",
+            ]
+            if c in company_topics.columns
+        ]
+
+        topic_text = (
+            company_topics[topic_cols]
+            .head(5)
+            .to_dict(orient="records")
+        )
+
+    sentence_text = []
+    if top_risk_sentences is not None and not top_risk_sentences.empty:
+        sentence_cols = [
+            c for c in [
+                "sentence",
+                "sentiment_label",
+                "sentiment_probability",
+                "topic_label",
+                "group",
+                "period",
+                "form",
+                "tag",
+            ]
+            if c in top_risk_sentences.columns
+        ]
+
+        sentence_text = (
+            top_risk_sentences[sentence_cols]
+            .to_dict(orient="records")
+        )
+
+    prompt = f"""
+You are a financial risk analyst.
+
+Generate a concise business-facing risk summary for the company below.
+
+Company:
+{company_name}
+
+Company-level RSI metrics:
+{overview_text}
+
+Top topic-level risk indicators:
+{topic_text}
+
+Top disclosure sentences:
+{sentence_text}
+
+Please produce:
+1. Overall risk interpretation
+2. Key risk drivers
+3. Explanation of the top disclosure sentences
+4. Suggested analyst attention points
+
+Requirements:
+- Use professional but simple English.
+- Do not invent facts beyond the provided data.
+- Keep it concise.
+- If the evidence is limited, clearly say so.
+"""
+
+    response = client.responses.create(
+        model="gpt-5.4-nano",
+        input=prompt,
+    )
+
+    return response.output_text
+
 def normalize_sentiment_label(label: str) -> str:
     label = str(label).lower()
 
@@ -756,9 +857,28 @@ with tab2:
                         """,
                         unsafe_allow_html=True,
                     )
+            # =================================================
+            # 4. AI Risk Analyst Summary
+            # =================================================
+            st.markdown("### 4. AI Risk Analyst Summary")
+
+            company_overview_row = None
+            if not company_overview.empty:
+                company_overview_row = company_overview.iloc[0]
+
+            if st.button("Generate AI Risk Summary", use_container_width=True):
+                with st.spinner("Generating AI analyst summary..."):
+                    ai_summary = generate_ai_risk_summary(
+                        company_name=selected_company,
+                        company_overview_row=company_overview_row,
+                        company_topics=company_topics,
+                        top_risk_sentences=top_risk_sentences,
+                    )
+
+                st.markdown(ai_summary)
 
             # =================================================
-            # 4. Company Topic-Level Risk Ranking
+            # 5. Company Topic-Level Risk Ranking
             # =================================================
             st.markdown("### 4. Company Topic-Level Risk Ranking")
 
@@ -791,7 +911,7 @@ with tab2:
                 )
 
             # =================================================
-            # 5. Market Topic Benchmark
+            # 6. Market Topic Benchmark
             # =================================================
             st.markdown("### 5. Market Topic Benchmark")
 
@@ -833,7 +953,7 @@ with tab2:
                 )
 
             # =================================================
-            # 6. Related Sentence-Level Records
+            # 7. Related Sentence-Level Records
             # =================================================
             st.markdown("### 6. Related Sentence-Level Records")
 
